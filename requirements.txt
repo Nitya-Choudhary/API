@@ -1,0 +1,6 @@
+
+streamlit
+tensorflow
+Pillow
+requests
+fpdf

@@ -3,6 +3,6 @@ uvicorn
 python-multipart
 pillow
 numpy
-tensorflow-cpu==2.13.0
+tensorflow-cpu==2.11.0
 requests
 matplotlib

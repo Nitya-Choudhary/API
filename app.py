@@ -11,83 +11,87 @@ import base64
 
 app = FastAPI()
 
-# Enable CORS for frontend access
+# CORS for frontend connection
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # change this to your frontend URL in production
+    allow_origins=["*"],  # update to specific domain later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Download the model from Hugging Face (first-time only)
+# Hugging Face model link
 MODEL_URL = "https://huggingface.co/NityaIGDTUW28/Brain_Tumor_Detection/resolve/main/brain_tumor_model.h5"
 MODEL_PATH = "brain_tumor_model.h5"
 
-# Load model once
+# Download model if not already
 def load_model():
     if not tf.io.gfile.exists(MODEL_PATH):
-        r = requests.get(MODEL_URL)
+        print("📥 Downloading model...")
+        response = requests.get(MODEL_URL)
         with open(MODEL_PATH, "wb") as f:
-            f.write(r.content)
-    model = tf.keras.models.load_model(MODEL_PATH)
-    return model
+            f.write(response.content)
+    return tf.keras.models.load_model(MODEL_PATH)
 
 model = load_model()
 
-# Dummy labels — update with your actual class labels
+# Dummy labels (replace with real ones if different)
 labels = ['No Tumor', 'Glioma', 'Meningioma', 'Pituitary']
 
+# Process image
 def preprocess_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img = img.resize((150, 150))  # Resize to model input size
+    img = img.resize((150, 150))
     img_array = np.array(img) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-    return img_array
+    return np.expand_dims(img_array, axis=0)
 
-def get_recommendation(pred_label):
-    recs = {
-        'No Tumor': 'Healthy brain. Continue regular checkups.',
-        'Glioma': 'Consult an oncologist. Treatment may include surgery or chemotherapy.',
-        'Meningioma': 'Consult a neurosurgeon. May require surgery or radiation.',
-        'Pituitary': 'Endocrinologist and MRI follow-ups suggested.'
-    }
-    return recs.get(pred_label, 'No recommendation available.')
+# Recommendations
+def get_recommendation(label):
+    return {
+        "No Tumor": "You appear healthy. Continue regular checkups.",
+        "Glioma": "Consult an oncologist immediately. Consider surgery or chemo.",
+        "Meningioma": "Consult a neurosurgeon. MRI monitoring recommended.",
+        "Pituitary": "Consult an endocrinologist. Hormonal evaluation may be needed."
+    }.get(label, "No recommendation available.")
 
+# Generate bar chart graph
 def generate_graph():
     plt.figure(figsize=(4, 3))
     tumor_types = ['Glioma', 'Meningioma', 'Pituitary']
-    cases = [120, 80, 60]
-    plt.bar(tumor_types, cases, color='skyblue')
-    plt.title('Common Tumor Types')
+    case_counts = [120, 90, 70]
+    plt.bar(tumor_types, case_counts, color='skyblue')
+    plt.title('Tumor Type Distribution')
     plt.xlabel('Tumor')
     plt.ylabel('Cases')
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     plt.close()
     buf.seek(0)
-    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    return img_base64
+    return base64.b64encode(buf.read()).decode('utf-8')
 
+# Predict endpoint
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
-        contents = await file.read()
-        img_array = preprocess_image(contents)
-        prediction = model.predict(img_array)
-        class_index = np.argmax(prediction)
-        pred_label = labels[class_index]
-        confidence = float(np.max(prediction))
-
-        recommendations = get_recommendation(pred_label)
-        graph_base64 = generate_graph()
+        image = await file.read()
+        input_tensor = preprocess_image(image)
+        preds = model.predict(input_tensor)
+        class_idx = np.argmax(preds)
+        label = labels[class_idx]
+        confidence = float(np.max(preds))
+        recommendation = get_recommendation(label)
+        graph = generate_graph()
 
         return JSONResponse({
-            "prediction": pred_label,
+            "prediction": label,
             "confidence": f"{confidence:.2%}",
-            "recommendation": recommendations,
-            "graph": graph_base64
+            "recommendation": recommendation,
+            "graph": graph
         })
-
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+# Root for health check
+@app.get("/")
+def read_root():
+    return {"message": "Brain Tumor Detection API is live!"}

@@ -1,75 +1,93 @@
-import streamlit as st
-import numpy as np
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+import numpy as np
 import tensorflow as tf
 import requests
 import io
-from fpdf import FPDF
+import matplotlib.pyplot as plt
 import base64
 
-st.set_page_config(page_title="NeuroTrace – Brain Tumor Detection", layout="centered")
+app = FastAPI()
 
-# Download model
-@st.cache_resource
+# Enable CORS for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # change this to your frontend URL in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Download the model from Hugging Face (first-time only)
+MODEL_URL = "https://huggingface.co/NityaIGDTUW28/Brain_Tumor_Detection/resolve/main/brain_tumor_model.h5"
+MODEL_PATH = "brain_tumor_model.h5"
+
+# Load model once
 def load_model():
-    url = "https://huggingface.co/NityaIGDTUW28/Brain_Tumor_Detection/resolve/main/brain_tumor_model.h5"
-    r = requests.get(url)
-    with open("brain_tumor_model.h5", "wb") as f:
-        f.write(r.content)
-    return tf.keras.models.load_model("brain_tumor_model.h5")
+    if not tf.io.gfile.exists(MODEL_PATH):
+        r = requests.get(MODEL_URL)
+        with open(MODEL_PATH, "wb") as f:
+            f.write(r.content)
+    model = tf.keras.models.load_model(MODEL_PATH)
+    return model
 
 model = load_model()
-class_names = ['Glioma', 'Meningioma', 'Pituitary', 'No Tumor']
 
-# Navigation
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Home", "About", "Contact"])
+# Dummy labels — update with your actual class labels
+labels = ['No Tumor', 'Glioma', 'Meningioma', 'Pituitary']
 
-# Dark/Light Mode toggle
-mode = st.sidebar.radio("Theme", ["Light", "Dark"])
-if mode == "Dark":
-    st.markdown('<style>body { background-color: #0e1117; color: white; }</style>', unsafe_allow_html=True)
-else:
-    st.markdown('<style>body { background-color: white; color: black; }</style>', unsafe_allow_html=True)
+def preprocess_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = img.resize((150, 150))  # Resize to model input size
+    img_array = np.array(img) / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
+    return img_array
 
-if page == "Home":
-    st.title("🧠 NeuroTrace – Brain Tumor Detection")
-    st.write("Upload an MRI image to detect tumor type.")
+def get_recommendation(pred_label):
+    recs = {
+        'No Tumor': 'Healthy brain. Continue regular checkups.',
+        'Glioma': 'Consult an oncologist. Treatment may include surgery or chemotherapy.',
+        'Meningioma': 'Consult a neurosurgeon. May require surgery or radiation.',
+        'Pituitary': 'Endocrinologist and MRI follow-ups suggested.'
+    }
+    return recs.get(pred_label, 'No recommendation available.')
 
-    uploaded_file = st.file_uploader("Choose an MRI Image", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
-        img = Image.open(uploaded_file).convert("RGB").resize((150, 150))
-        st.image(img, caption="Uploaded Image", use_column_width=True)
-        img_array = np.expand_dims(np.array(img) / 255.0, axis=0)
+def generate_graph():
+    plt.figure(figsize=(4, 3))
+    tumor_types = ['Glioma', 'Meningioma', 'Pituitary']
+    cases = [120, 80, 60]
+    plt.bar(tumor_types, cases, color='skyblue')
+    plt.title('Common Tumor Types')
+    plt.xlabel('Tumor')
+    plt.ylabel('Cases')
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    plt.close()
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    return img_base64
 
-        if st.button("Diagnose"):
-            prediction = model.predict(img_array)[0]
-            pred_class = class_names[np.argmax(prediction)]
-            confidence = float(np.max(prediction)) * 100
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        img_array = preprocess_image(contents)
+        prediction = model.predict(img_array)
+        class_index = np.argmax(prediction)
+        pred_label = labels[class_index]
+        confidence = float(np.max(prediction))
 
-            st.success(f"Prediction: **{pred_class}** ({confidence:.2f}% confidence)")
+        recommendations = get_recommendation(pred_label)
+        graph_base64 = generate_graph()
 
-            # PDF Report Download
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Arial", size=12)
-            pdf.cell(200, 10, txt="🧠 NeuroTrace Brain Tumor Diagnosis Report", ln=True)
-            pdf.cell(200, 10, txt=f"Diagnosis: {pred_class}", ln=True)
-            pdf.cell(200, 10, txt=f"Confidence: {confidence:.2f}%", ln=True)
+        return JSONResponse({
+            "prediction": pred_label,
+            "confidence": f"{confidence:.2%}",
+            "recommendation": recommendations,
+            "graph": graph_base64
+        })
 
-            pdf_path = "/mnt/data/diagnosis_report.pdf"
-            pdf.output(pdf_path)
-            with open(pdf_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-                st.markdown(f'<a href="data:application/pdf;base64,{b64}" download="diagnosis_report.pdf">📄 Download Report</a>', unsafe_allow_html=True)
-
-elif page == "About":
-    st.title("About NeuroTrace")
-    st.write("NeuroTrace is a brain tumor detection app using deep learning.")
-    st.write("It classifies brain MRI images into four categories: Glioma, Meningioma, Pituitary, and No Tumor.")
-
-elif page == "Contact":
-    st.title("Contact Us")
-    st.write("**Name:** Nitya Choudhary")
-    st.write("**Email:** nityapunia141@gmail.com")
-    st.image("https://res.cloudinary.com/dx9m0jvtj/image/upload/v1753360412/4e45b59b-fc96-4871-8110-3964dfbf0bfe_vkes4w.jpg", use_column_width=True)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)

@@ -1,8 +1,4 @@
-fastapi
-uvicorn
-pillow
-tensorflow-cpu
+gradio
+tensorflow==2.9.1
 numpy
-requests
-python-multipart
-matplotlib
+Pillow
